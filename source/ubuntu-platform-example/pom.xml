@@ -1,0 +1,25 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<groupId>com.thoughtworks.devops</groupId>
+	<artifactId>ubuntu-platform-example</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>Example Ubuntu platform</name>
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>com.thoughtworks.plugins</groupId>
+				<artifactId>iac-maven-plugin</artifactId>
+				<version>0.0.1-SNAPSHOT</version>
+				<executions>
+					<execution>
+						<phase>pre-integration-test</phase>
+						<goals>
+							<goal>launch</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+</project>
