@@ -1,25 +1,22 @@
 package com.thoughtworks.plugins.iac;
 
-import static org.twdata.maven.mojoexecutor.MojoExecutor.artifactId;
-import static org.twdata.maven.mojoexecutor.MojoExecutor.configuration;
-import static org.twdata.maven.mojoexecutor.MojoExecutor.element;
-import static org.twdata.maven.mojoexecutor.MojoExecutor.executeMojo;
-import static org.twdata.maven.mojoexecutor.MojoExecutor.executionEnvironment;
-import static org.twdata.maven.mojoexecutor.MojoExecutor.goal;
-import static org.twdata.maven.mojoexecutor.MojoExecutor.groupId;
-import static org.twdata.maven.mojoexecutor.MojoExecutor.name;
-import static org.twdata.maven.mojoexecutor.MojoExecutor.plugin;
-import static org.twdata.maven.mojoexecutor.MojoExecutor.version;
-
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.PluginManager;
-import org.apache.maven.project.MavenProject;
+import org.codehaus.mojo.ec2.AbstractEc2Mojo;
+import org.codehaus.mojo.ec2.TerminateInstancesThread;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.xerox.amazonws.ec2.EC2Exception;
+import com.xerox.amazonws.ec2.Jec2;
+import com.xerox.amazonws.ec2.LaunchConfiguration;
+import com.xerox.amazonws.ec2.ReservationDescription;
+import com.xerox.amazonws.ec2.ReservationDescription.Instance;
 
 /**
  * Goal which launches a platform.
@@ -28,35 +25,11 @@ import org.apache.maven.project.MavenProject;
  * 
  * @phase pre-integration-test
  */
-public class LaunchMojo extends AbstractMojo {
-	/**
-	 * The Maven Project Object
-	 * 
-	 * @parameter expression="${project}"
-	 * @required
-	 * @readonly
-	 */
-	protected MavenProject project;
+public class LaunchMojo extends AbstractEc2Mojo {
 
-	/**
-	 * The Maven Session Object
-	 * 
-	 * @parameter expression="${session}"
-	 * @required
-	 * @readonly
-	 */
-	protected MavenSession session;
+	final Logger logger = LoggerFactory.getLogger(LaunchMojo.class);
 
-	/**
-	 * The Maven PluginManager Object
-	 * 
-	 * @component
-	 * @required
-	 */
-	protected PluginManager pluginManager;
-
-
-	public void execute() throws MojoExecutionException {
+	public void doExecute(Jec2 ec2) throws MojoExecutionException {
 		Properties props = new Properties();
 		try {
 			props.load(new FileInputStream(
@@ -65,20 +38,56 @@ public class LaunchMojo extends AbstractMojo {
 			throw new MojoExecutionException(
 					"Could not read platform.properties", e);
 		}
-		String amiID = props.getProperty("ami");
-		getLog().info("Launching instance with ami id: " + amiID );
-		executeMojo(plugin(groupId("org.codehaus.mojo"),
-				artifactId("ec2-maven-plugin"), version("1.0-SNAPSHOT")),
-				goal("start"), configuration(element(
-						name("launchConfigurations"), element(
-								name("launchConfiguration"), element(
-										name("imageId"), amiID),
-								element(name("minCount"), "1"), element(
-										name("maxCount"), "1"), element(
-										name("keyName"), "thoughtworks"),
-								element(name("wait"), "true"), element(
-										name("terminate"), "true")))
+		String amiId = props.getProperty("ami");
+		getLog().info("Launching instance with ami id: " + amiId);
 
-				), executionEnvironment(project, session, pluginManager));
+		// Launch a new instance
+		LaunchConfiguration lc = new LaunchConfiguration(amiId);
+		try {
+			List<Instance> instances = ec2.runInstances(lc).getInstances();
+			waitForInstancesToStart(ec2, instances);
+			// Add a shutdown hook to terminate the instance
+			List<Instance> instancesToTerminate = new ArrayList<Instance>(1);
+			instancesToTerminate.addAll(instances);
+			TerminateInstancesThread.addShutdownHook(ec2, instancesToTerminate);
+		} catch (EC2Exception e) {
+			throw new MojoExecutionException("Exception in EC2: "
+					+ e.getMessage(), e);
+		}
+	}
+
+	private void waitForInstancesToStart(Jec2 ec2, List<Instance> instances)
+			throws MojoExecutionException {
+		List<String> instanceIds = new ArrayList<String>(instances.size());
+		for (Instance instance : instances) {
+			instanceIds.add(instance.getInstanceId());
+		}
+
+		while (!instanceIds.isEmpty()) {
+			try {
+				for (ReservationDescription description : ec2.describeInstances(instanceIds)) {
+					for (Instance currentInstance : description.getInstances()) {
+						if (currentInstance.isRunning()) {
+							instanceIds.remove(currentInstance.getInstanceId());
+						}
+					}
+				}
+			} catch (EC2Exception e) {
+				throw new MojoExecutionException("Error describing instances "
+						+ instanceIds, e);
+			}
+
+			if (instanceIds.isEmpty()) {
+				return;
+			}
+
+			try {
+				logger.info("Waiting for instances to start: {}", instanceIds);
+				Thread.sleep(10 * 1000); // 10 sec
+			} catch (InterruptedException e) {
+				throw new MojoExecutionException(
+						"Poll for available interrupted : " + e.getMessage(), e);
+			}
+		}
 	}
 }
